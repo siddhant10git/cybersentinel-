@@ -71,10 +71,16 @@ class CyberSentinelEnv:
     async def from_docker_image(
         cls,
         image_name: str,
-        port: int = 7860,
+        port: Optional[int] = None,
         timeout: int = 30,
     ) -> "CyberSentinelEnv":
         """Launch a Docker container from the given image and return a connected client."""
+        if port is None:
+            import socket
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', 0))
+                port = s.getsockname()[1]
+
         container_id = subprocess.check_output(
             [
                 "docker", "run", "-d", "--rm",
