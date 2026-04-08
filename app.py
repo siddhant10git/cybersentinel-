@@ -30,8 +30,10 @@ env = CyberSentinelEnv()
 
 # ── Request / Response schemas ───────────────────────────────────────────────
 
+from typing import Optional
+
 class ResetRequest(BaseModel):
-    task_id: str
+    task_id: str = "easy"
 
 
 class TaskInfo(BaseModel):
@@ -46,10 +48,11 @@ class TaskInfo(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 @app.post("/reset", response_model=Observation)
-def reset(req: ResetRequest):
+def reset(req: Optional[ResetRequest] = None):
     """Load a task and return the initial observation."""
+    task_id = req.task_id if req else "easy"
     try:
-        obs = env.reset(req.task_id)
+        obs = env.reset(task_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return obs
