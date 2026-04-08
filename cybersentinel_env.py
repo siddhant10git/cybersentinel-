@@ -100,7 +100,7 @@ class CyberSentinelEnv:
                 resp = await env._client.get("/health")
                 if resp.status_code == 200:
                     return env
-            except (httpx.ConnectError, httpx.ReadError):
+            except Exception:
                 pass
             await asyncio.sleep(0.5)
 
