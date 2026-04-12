@@ -10,7 +10,7 @@ from __future__ import annotations
 import enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ── Enums ────────────────────────────────────────────────────────────────────
@@ -49,6 +49,7 @@ class Alert(BaseModel):
     severity_raw: Severity
     description: str = Field(..., description="Human-readable summary")
     raw_log: str = Field(..., description="Raw log line / packet excerpt")
+
     # Hidden ground-truth — never exposed in observations
     ground_truth_classification: Classification = Field(
         ..., exclude=True, description="Ground-truth label (hidden from agent)"
@@ -61,6 +62,21 @@ class Alert(BaseModel):
         default_factory=list, exclude=True,
         description="IOCs the justification should mention (hidden)"
     )
+    # Optional: which sibling alert IDs form the same attack chain
+    chain_alert_ids: list[str] = Field(
+        default_factory=list, exclude=True,
+        description="Alert IDs in the same attack chain (for correlation bonus)"
+    )
+
+    @field_validator("timestamp")
+    @classmethod
+    def validate_timestamp(cls, v: str) -> str:
+        """Ensure timestamp looks like an ISO-8601 datetime."""
+        import re
+        pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+        if not re.match(pattern, v):
+            raise ValueError(f"timestamp must be ISO-8601 format, got: {v!r}")
+        return v
 
 
 class ThreatIntelReport(BaseModel):
@@ -95,7 +111,14 @@ class Observation(BaseModel):
     time_remaining: int = Field(..., description="Steps remaining")
     alerts_processed: int = Field(0, description="Alerts classified so far")
     alerts_total: int = Field(..., description="Total alerts in the task")
-    current_score: float = Field(0.0, description="Running average score")
+    running_reward_avg: float = Field(
+        0.0,
+        description="Running average of per-step rewards (in-episode signal, not final score)"
+    )
+    steps_warning: bool = Field(
+        False,
+        description="True when 3 or fewer steps remain — agent should prioritise"
+    )
 
 
 class Action(BaseModel):
@@ -105,7 +128,7 @@ class Action(BaseModel):
     classification: Classification
     priority: int = Field(..., ge=1, le=5, description="Agent-assigned priority 1-5")
     justification: str = Field(
-        ..., min_length=1,
+        ..., min_length=1, max_length=2000,
         description="Free-text justification for the classification"
     )
 
@@ -127,6 +150,7 @@ class Reward(BaseModel):
     priority_score: float = 0.0
     justification_score: float = 0.0
     disinformation_bonus: float = 0.0
+    correlation_bonus: float = 0.0
     time_penalty: float = 0.0
     breakdown: dict[str, float] = Field(default_factory=dict)
 
@@ -142,4 +166,5 @@ class EnvState(BaseModel):
     current_score: float
     done: bool
     scores_per_alert: dict[str, float] = Field(default_factory=dict)
+    reward_details_per_alert: dict[str, dict] = Field(default_factory=dict)
     pending_alert_ids: list[str] = Field(default_factory=list)

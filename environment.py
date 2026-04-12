@@ -2,11 +2,11 @@
 CyberSentinel — Environment core.
 
 Implements the OpenEnv interface: reset() / step() / state().
+All reward weights are defined in graders.GraderConfig.
 """
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 from models import (
@@ -19,19 +19,23 @@ from models import (
     StepResult,
     ThreatIntelReport,
 )
+from graders import GraderConfig, DEFAULT_CONFIG
 from tasks import get_task
+
+# Number of remaining steps at which to set steps_warning=True
+_STEPS_WARNING_THRESHOLD = 4
 
 
 class CyberSentinelEnv:
     """Threat-intelligence triage environment."""
 
-    def __init__(self) -> None:
+    def __init__(self, config: GraderConfig = DEFAULT_CONFIG) -> None:
+        self._config = config
         self._task_id: str = ""
         self._task_meta: dict = {}
         self._alerts: list[Alert] = []
         self._intel_reports: list[ThreatIntelReport] = []
         self._pending_ids: list[str] = []
-        self._current_idx: int = 0
         self._step_count: int = 0
         self._max_steps: int = 0
         self._done: bool = True
@@ -52,6 +56,7 @@ class CyberSentinelEnv:
         d.pop("ground_truth_classification", None)
         d.pop("ground_truth_priority", None)
         d.pop("relevant_iocs", None)
+        d.pop("chain_alert_ids", None)
         return d
 
     def _safe_obs_intel(self, report: ThreatIntelReport) -> dict[str, Any]:
@@ -66,87 +71,98 @@ class CyberSentinelEnv:
             if a.id in self._pending_ids
         ]
         current = None
-        if self._current_idx < len(self._alerts) and not self._done:
-            current = self._safe_obs_alert(self._alerts[self._current_idx])
+        if self._pending_ids and not self._done:
+            # Present the first pending alert (sequential mode)
+            next_id = self._pending_ids[0]
+            alert = self._alert_by_id(next_id)
+            if alert:
+                current = self._safe_obs_alert(alert)
 
         processed = len(self._scores)
         avg = sum(self._scores.values()) / max(processed, 1)
+        remaining = max(self._max_steps - self._step_count, 0)
 
         return Observation(
             pending_alerts=pending,
             intel_reports=[self._safe_obs_intel(r) for r in self._intel_reports],
             current_alert=current,
-            time_remaining=max(self._max_steps - self._step_count, 0),
+            time_remaining=remaining,
             alerts_processed=processed,
             alerts_total=len(self._alerts),
-            current_score=round(avg, 4),
+            running_reward_avg=round(avg, 4),
+            steps_warning=(remaining <= _STEPS_WARNING_THRESHOLD and not self._done),
         )
 
     # ── reward computation ───────────────────────────────────────────────
 
     def _compute_reward(self, action: Action, alert: Alert) -> Reward:
-        """Compute per-step reward with partial-credit signals."""
+        """Compute per-step reward with partial-credit signals.
+
+        Weights are sourced from self._config to keep graders.py and
+        environment.py in sync.
+        """
+        cfg = self._config
         classification_score = 0.0
         priority_score = 0.0
         justification_score = 0.0
         disinformation_bonus = 0.0
+        correlation_bonus = 0.0
         time_penalty = 0.0
 
-        # 1. Classification accuracy (0.0 or 0.35)
+        # 1. Classification accuracy
         if action.classification == alert.ground_truth_classification:
-            classification_score = 0.35
+            classification_score = cfg.classification_weight
         elif (
             action.classification == Classification.NEEDS_ESCALATION
             and alert.ground_truth_classification == Classification.TRUE_POSITIVE
         ):
-            # Escalating a true positive is partially correct
-            classification_score = 0.20
+            classification_score = cfg.classification_weight * cfg.escalation_partial_credit
 
-        # 2. Priority accuracy (up to 0.25, scaled by distance)
+        # 2. Priority accuracy (scaled by distance)
         dist = abs(action.priority - alert.ground_truth_priority)
-        priority_score = max(0.0, 0.25 * (1.0 - dist / 4.0))
+        priority_score = max(0.0, cfg.priority_weight * (1.0 - dist / 4.0))
 
-        # 3. Justification quality (up to 0.15)
+        # 3. Justification quality — IOC keyword coverage
         if alert.relevant_iocs:
-            justification_lower = action.justification.lower()
-            matched = sum(
-                1 for ioc in alert.relevant_iocs
-                if ioc.lower() in justification_lower
+            jl = action.justification.lower()
+            matched = sum(1 for ioc in alert.relevant_iocs if ioc.lower() in jl)
+            justification_score = cfg.justification_weight * min(
+                matched / max(len(alert.relevant_iocs), 1), 1.0
             )
-            justification_score = 0.15 * min(matched / max(len(alert.relevant_iocs), 1), 1.0)
 
-        # 4. Disinformation resistance (hard task only, up to 0.20)
-        if self._task_id == "hard":
-            disinfo_reports = [r for r in self._intel_reports if r.is_disinformation]
-            if disinfo_reports:
-                justification_lower = action.justification.lower()
-                # Bonus if agent explicitly notes disinformation / untrustworthiness
-                disinfo_keywords = [
-                    "disinformation", "misleading", "false report",
-                    "adversarial", "planted", "untrusted", "do not trust",
-                    "suspicious intel", "fabricated", "ignore this report",
-                ]
-                mentioned = any(kw in justification_lower for kw in disinfo_keywords)
-                if mentioned:
-                    disinformation_bonus = 0.20
-                # Penalty if agent cites disinformation report as reason to classify TP as FP
-                for dr in disinfo_reports:
-                    if (
-                        dr.id.lower() in justification_lower
-                        and action.classification == Classification.FALSE_POSITIVE
-                        and alert.ground_truth_classification == Classification.TRUE_POSITIVE
-                    ):
-                        disinformation_bonus = -0.15
-                        break
+        # 4. Disinformation resistance — task-agnostic (checks report flag)
+        disinfo_reports = [r for r in self._intel_reports if r.is_disinformation]
+        if disinfo_reports:
+            jl = action.justification.lower()
+            mentioned = any(kw in jl for kw in cfg.disinformation_keywords)
+            if mentioned and action.classification == alert.ground_truth_classification:
+                disinformation_bonus = cfg.disinformation_weight
+            # Penalty if agent cites a disinfo report as reason to FP a TP
+            for dr in disinfo_reports:
+                if (
+                    dr.id.lower() in jl
+                    and action.classification == Classification.FALSE_POSITIVE
+                    and alert.ground_truth_classification == Classification.TRUE_POSITIVE
+                ):
+                    disinformation_bonus = -0.15
+                    break
 
-        # 5. Time penalty — mild cost for using extra steps
+        # 5. Cross-alert correlation bonus
+        if alert.chain_alert_ids:
+            jl = action.justification.lower()
+            cited = any(aid.lower() in jl for aid in alert.chain_alert_ids)
+            if cited:
+                correlation_bonus = cfg.correlation_bonus
+
+        # 6. Time penalty — meaningful cost for burning excess steps
         optimal_steps = len(self._alerts)
         if self._step_count > optimal_steps:
-            time_penalty = -0.05 * (self._step_count - optimal_steps) / max(self._max_steps, 1)
+            raw_penalty = cfg.time_penalty_per_step * (self._step_count - optimal_steps) / max(self._max_steps, 1)
+            time_penalty = -min(raw_penalty, cfg.max_time_penalty)
 
         total = max(0.0, min(1.0,
             classification_score + priority_score + justification_score
-            + disinformation_bonus + time_penalty
+            + disinformation_bonus + correlation_bonus + time_penalty
         ))
 
         return Reward(
@@ -155,12 +171,14 @@ class CyberSentinelEnv:
             priority_score=round(priority_score, 4),
             justification_score=round(justification_score, 4),
             disinformation_bonus=round(disinformation_bonus, 4),
+            correlation_bonus=round(correlation_bonus, 4),
             time_penalty=round(time_penalty, 4),
             breakdown={
                 "classification": round(classification_score, 4),
                 "priority": round(priority_score, 4),
                 "justification": round(justification_score, 4),
                 "disinformation": round(disinformation_bonus, 4),
+                "correlation": round(correlation_bonus, 4),
                 "time": round(time_penalty, 4),
             },
         )
@@ -172,10 +190,10 @@ class CyberSentinelEnv:
         task = get_task(task_id)
         self._task_id = task_id
         self._task_meta = task
-        self._alerts = copy.deepcopy(task["alerts"])
-        self._intel_reports = copy.deepcopy(task["intel_reports"])
+        # Use Pydantic v2's model_copy for type-safe deep copies
+        self._alerts = [a.model_copy(deep=True) for a in task["alerts"]]
+        self._intel_reports = [r.model_copy(deep=True) for r in task["intel_reports"]]
         self._pending_ids = [a.id for a in self._alerts]
-        self._current_idx = 0
         self._step_count = 0
         self._max_steps = task["max_steps"]
         self._done = False
@@ -193,7 +211,6 @@ class CyberSentinelEnv:
         # Validate alert_id
         alert = self._alert_by_id(action.alert_id)
         if alert is None:
-            # Invalid alert — zero reward, don't advance
             return StepResult(
                 observation=self._build_observation(),
                 reward=0.0,
@@ -216,7 +233,6 @@ class CyberSentinelEnv:
 
         # Advance state
         self._pending_ids.remove(action.alert_id)
-        self._current_idx += 1
 
         # Check done conditions
         if not self._pending_ids or self._step_count >= self._max_steps:
@@ -254,5 +270,6 @@ class CyberSentinelEnv:
             current_score=round(avg, 4),
             done=self._done,
             scores_per_alert=self._scores,
+            reward_details_per_alert=self._reward_details,
             pending_alert_ids=list(self._pending_ids),
         )

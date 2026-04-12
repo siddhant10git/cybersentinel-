@@ -1,14 +1,21 @@
 """
-CyberSentinel — Pre-built task scenarios.
+CyberSentinel — Pre-built task scenarios (v2).
 
-Three difficulty-graded tasks with alerts, intel reports, and ground-truth labels.
+Five difficulty-graded tasks:
+  easy   — Routine Shift        (7 alerts, 3 FP, clear signals)
+  medium — Busy Day             (12 alerts, 5 FP, correlated patterns, 2 NE)
+  hard   — APT Campaign         (17 alerts, 6 FP, 3 disinfo reports, kill chain)
+  insider— Insider Threat       (8 alerts, 3 FP, no C2, cloud exfil)
+  zero   — Zero Alert Shift     (5 alerts, ALL FP, over-trigger bias test)
 """
 
 from models import Alert, AlertType, Classification, Severity, ThreatIntelReport
 
 
+# ── EASY TASK ─────────────────────────────────────────────────────────────────
+
 def _easy_task() -> dict:
-    """Routine Shift: 5 alerts, 2 false positives, clear signals."""
+    """Routine Shift: 7 alerts, 3 FPs. Clear signals + 1 correlated intel chain."""
     alerts = [
         Alert(
             id="ALERT-E001",
@@ -22,6 +29,7 @@ def _easy_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["203.0.113.45", "CS_BEACON_v4", "JA3=abc123"],
+            chain_alert_ids=["ALERT-E005"],
         ),
         Alert(
             id="ALERT-E002",
@@ -48,6 +56,7 @@ def _easy_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=4,
             relevant_iocs=["company-update.biz", "invoice.pdf.exe", "198.51.100.77"],
+            chain_alert_ids=["ALERT-E005"],
         ),
         Alert(
             id="ALERT-E004",
@@ -59,7 +68,7 @@ def _easy_task() -> dict:
             description="Firewall blocked outbound connection attempt from printer to gateway on unusual port.",
             raw_log="[FW] BLOCK 10.0.3.100:61234 -> 10.0.3.1:8443 | proto=TCP | rule=DEFAULT_DENY | device=HP_LaserJet",
             ground_truth_classification=Classification.FALSE_POSITIVE,
-            ground_truth_priority=1,
+            ground_truth_priority=2,  # Varied from 1 — not all non-threats are lowest priority
             relevant_iocs=[],
         ),
         Alert(
@@ -74,6 +83,36 @@ def _easy_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["192.0.2.99", "powershell -enc", "winword.exe→powershell"],
+            chain_alert_ids=["ALERT-E001", "ALERT-E003"],
+        ),
+        # NEW: DNS-based TP — beaconing to known C2 domain
+        Alert(
+            id="ALERT-E006",
+            timestamp="2026-04-08T08:21:05Z",
+            source_ip="10.0.1.20",
+            dest_ip="10.0.0.53",
+            alert_type=AlertType.DNS,
+            severity_raw=Severity.HIGH,
+            description="DNS query from compromised host to known C2 domain associated with Cobalt Strike infrastructure.",
+            raw_log="[DNS] 10.0.1.20 -> 10.0.0.53 | query=update.totallylegit-cdn.xyz | type=A | response=203.0.113.45 | category=C2_KNOWN",
+            ground_truth_classification=Classification.TRUE_POSITIVE,
+            ground_truth_priority=5,
+            relevant_iocs=["update.totallylegit-cdn.xyz", "203.0.113.45", "C2_KNOWN"],
+            chain_alert_ids=["ALERT-E001", "ALERT-E005"],
+        ),
+        # NEW: Medium-severity FP — teaches agents ambiguity at MEDIUM level
+        Alert(
+            id="ALERT-E007",
+            timestamp="2026-04-08T08:23:30Z",
+            source_ip="10.0.5.10",
+            dest_ip="10.0.5.200",
+            alert_type=AlertType.ENDPOINT,
+            severity_raw=Severity.MEDIUM,
+            description="IT administrator running system inventory script using WMI queries across workstations — scheduled monthly task.",
+            raw_log="[EDR] host=MGMT-01 | proc=wmic.exe | cmd='wmic /node:10.0.5.0/24 cpu get caption' | user=CORP\\itadmin | schedule=monthly_inventory | signed=true",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
         ),
     ]
 
@@ -82,16 +121,24 @@ def _easy_task() -> dict:
             id="INTEL-E001",
             source="CISA Advisory",
             title="Cobalt Strike Beacon Activity Targeting Financial Sector",
-            summary="CISA has observed increased Cobalt Strike beacon activity targeting financial institutions. C2 infrastructure uses TLS with JA3 fingerprint abc123. Source IPs include 203.0.113.0/24 range.",
-            iocs=["203.0.113.45", "JA3=abc123", "CS_BEACON_v4"],
+            summary="CISA has observed increased Cobalt Strike beacon activity targeting financial institutions. C2 infrastructure uses TLS with JA3 fingerprint abc123. Source IPs include 203.0.113.0/24 range. Known C2 domains include *.totallylegit-cdn.xyz.",
+            iocs=["203.0.113.45", "JA3=abc123", "CS_BEACON_v4", "totallylegit-cdn.xyz"],
             is_disinformation=False,
         ),
         ThreatIntelReport(
             id="INTEL-E002",
             source="Internal SOC",
             title="Known Printer Firmware Update Behavior",
-            summary="HP LaserJet printers on subnet 10.0.3.0/24 periodically attempt outbound connections to gateway port 8443 during firmware update checks. This is expected behavior.",
+            summary="HP LaserJet printers periodically attempt outbound connections to gateway port 8443 during firmware update checks. Verify by checking device field in firewall logs for 'HP_LaserJet'.",
             iocs=[],
+            is_disinformation=False,
+        ),
+        ThreatIntelReport(
+            id="INTEL-E003",
+            source="Internal SOC Playbook",
+            title="Phishing → PowerShell Execution Chain — Finance Department",
+            summary="Ongoing campaign targeting finance staff: spoofed invoice emails (SPF/DKIM fail) from *company-update.biz lead to macro-enabled Office documents spawning encoded PowerShell sessions with external C2 callbacks. Treat any winword.exe → powershell chain as high-confidence compromise.",
+            iocs=["company-update.biz", "invoice.pdf.exe", "powershell -enc", "winword.exe→powershell"],
             is_disinformation=False,
         ),
     ]
@@ -100,16 +147,46 @@ def _easy_task() -> dict:
         "task_id": "easy",
         "name": "Routine Shift",
         "difficulty": "easy",
-        "description": "A calm morning shift. Five alerts with clear signals—two are obvious false positives. Intel reports are straightforward and trustworthy.",
+        "description": "A calm morning shift. Seven alerts with clear signals — three are false positives. A 3rd intel report links the phishing email to the PowerShell C2 callback, rewarding agents who connect the dots.",
         "alerts": alerts,
         "intel_reports": intel_reports,
-        "max_steps": 10,
+        "max_steps": 12,
     }
 
 
+# ── MEDIUM TASK ───────────────────────────────────────────────────────────────
+
 def _medium_task() -> dict:
-    """Busy Day: 10 alerts, 4 false positives, subtler signals."""
+    """Busy Day: 12 alerts, 5 FPs, 2 NEEDS_ESCALATION, 1 misleading intel report."""
     alerts = [
+        # Shuffled order — agent must reconstruct timeline
+        Alert(
+            id="ALERT-M005",
+            timestamp="2026-04-08T10:15:22Z",
+            source_ip="91.219.236.18",
+            dest_ip="10.0.1.10",
+            alert_type=AlertType.IDS,
+            severity_raw=Severity.HIGH,
+            description="Repeated authentication failures from external IP followed by successful login — potential brute force.",
+            raw_log="[IDS] 91.219.236.18 -> 10.0.1.10:22 | SSH auth_fail x47 in 120s then auth_success | user=admin | geo=RU",
+            ground_truth_classification=Classification.TRUE_POSITIVE,
+            ground_truth_priority=5,
+            relevant_iocs=["91.219.236.18", "brute force SSH", "47 failures"],
+            chain_alert_ids=["ALERT-M003", "ALERT-M007", "ALERT-M009"],
+        ),
+        Alert(
+            id="ALERT-M002",
+            timestamp="2026-04-08T10:05:30Z",
+            source_ip="10.0.4.22",
+            dest_ip="10.0.4.1",
+            alert_type=AlertType.FIREWALL,
+            severity_raw=Severity.LOW,
+            description="Internal host accessed file share on a different VLAN during business hours.",
+            raw_log="[FW] ALLOW 10.0.4.22:49876 -> 10.0.4.1:445 | proto=SMB | user=jsmith | share=\\\\fileserv\\shared",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
         Alert(
             id="ALERT-M001",
             timestamp="2026-04-08T10:02:11Z",
@@ -122,16 +199,17 @@ def _medium_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=4,
             relevant_iocs=["185.220.101.33", "SQL injection", "Tor exit"],
+            chain_alert_ids=["ALERT-M003", "ALERT-M007"],
         ),
         Alert(
-            id="ALERT-M002",
-            timestamp="2026-04-08T10:05:30Z",
-            source_ip="10.0.4.22",
-            dest_ip="10.0.4.1",
-            alert_type=AlertType.FIREWALL,
+            id="ALERT-M008",
+            timestamp="2026-04-08T10:24:10Z",
+            source_ip="172.16.0.5",
+            dest_ip="172.16.0.1",
+            alert_type=AlertType.DNS,
             severity_raw=Severity.LOW,
-            description="Internal host attempted to access file share on a different VLAN during business hours.",
-            raw_log="[FW] ALLOW 10.0.4.22:49876 -> 10.0.4.1:445 | proto=SMB | user=jsmith | share=\\\\fileserv\\shared",
+            description="Internal DNS resolution for Active Directory domain controller.",
+            raw_log="[DNS] 172.16.0.5 -> 172.16.0.1 | query=dc01.corp.local | type=A | response=172.16.0.1 | internal",
             ground_truth_classification=Classification.FALSE_POSITIVE,
             ground_truth_priority=1,
             relevant_iocs=[],
@@ -148,32 +226,7 @@ def _medium_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=4,
             relevant_iocs=["xk7r9m2q4p.click", "DGA", "45.33.32.156"],
-        ),
-        Alert(
-            id="ALERT-M004",
-            timestamp="2026-04-08T10:12:05Z",
-            source_ip="10.0.2.30",
-            dest_ip="13.107.42.14",
-            alert_type=AlertType.ENDPOINT,
-            severity_raw=Severity.LOW,
-            description="Microsoft Teams process connecting to Microsoft cloud infrastructure.",
-            raw_log="[EDR] host=WS-HR-05 | proc=Teams.exe | net=13.107.42.14:443 | cert=*.teams.microsoft.com | signed=Microsoft",
-            ground_truth_classification=Classification.FALSE_POSITIVE,
-            ground_truth_priority=1,
-            relevant_iocs=[],
-        ),
-        Alert(
-            id="ALERT-M005",
-            timestamp="2026-04-08T10:15:22Z",
-            source_ip="91.219.236.18",
-            dest_ip="10.0.1.10",
-            alert_type=AlertType.IDS,
-            severity_raw=Severity.HIGH,
-            description="Repeated authentication failures from external IP followed by successful login — potential brute force.",
-            raw_log="[IDS] 91.219.236.18 -> 10.0.1.10:22 | SSH auth_fail x47 in 120s then auth_success | user=admin | geo=RU",
-            ground_truth_classification=Classification.TRUE_POSITIVE,
-            ground_truth_priority=5,
-            relevant_iocs=["91.219.236.18", "brute force SSH", "47 failures"],
+            chain_alert_ids=["ALERT-M001", "ALERT-M007"],
         ),
         Alert(
             id="ALERT-M006",
@@ -189,30 +242,31 @@ def _medium_task() -> dict:
             relevant_iocs=[],
         ),
         Alert(
+            id="ALERT-M004",
+            timestamp="2026-04-08T10:12:05Z",
+            source_ip="10.0.2.30",
+            dest_ip="13.107.42.14",
+            alert_type=AlertType.ENDPOINT,
+            severity_raw=Severity.LOW,
+            description="Microsoft Teams process connecting to Microsoft cloud infrastructure.",
+            raw_log="[EDR] host=WS-HR-05 | proc=Teams.exe | net=13.107.42.14:443 | cert=*.teams.microsoft.com | signed=Microsoft",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+        Alert(
             id="ALERT-M007",
             timestamp="2026-04-08T10:21:33Z",
             source_ip="10.0.1.10",
             dest_ip="198.51.100.200",
             alert_type=AlertType.FIREWALL,
             severity_raw=Severity.HIGH,
-            description="Large outbound data transfer from web server to external IP not in allowlist — potential exfiltration.",
+            description="Large outbound data transfer from web server to external IP not in allowlist — potential exfiltration after brute-force compromise.",
             raw_log="[FW] ALLOW 10.0.1.10:50123 -> 198.51.100.200:443 | proto=TLS | bytes_out=54MB in 180s | not_in_allowlist",
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["198.51.100.200", "54MB exfiltration", "data exfil"],
-        ),
-        Alert(
-            id="ALERT-M008",
-            timestamp="2026-04-08T10:24:10Z",
-            source_ip="172.16.0.5",
-            dest_ip="172.16.0.1",
-            alert_type=AlertType.DNS,
-            severity_raw=Severity.LOW,
-            description="Internal DNS resolution for Active Directory domain controller.",
-            raw_log="[DNS] 172.16.0.5 -> 172.16.0.1 | query=dc01.corp.local | type=A | response=172.16.0.1 | internal",
-            ground_truth_classification=Classification.FALSE_POSITIVE,
-            ground_truth_priority=1,
-            relevant_iocs=[],
+            chain_alert_ids=["ALERT-M001", "ALERT-M003", "ALERT-M005"],
         ),
         Alert(
             id="ALERT-M009",
@@ -226,6 +280,7 @@ def _medium_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["psexec.exe", "lateral movement", "LOCAL_ADMIN"],
+            chain_alert_ids=["ALERT-M005", "ALERT-M007"],
         ),
         Alert(
             id="ALERT-M010",
@@ -234,11 +289,39 @@ def _medium_task() -> dict:
             dest_ip="10.0.6.51",
             alert_type=AlertType.EMAIL,
             severity_raw=Severity.MEDIUM,
-            description="Internal email with macro-enabled document detected by email gateway — but sender is known IT distribution list.",
+            description="Internal email with macro-enabled document detected by email gateway — sender is known IT distribution list.",
             raw_log="[EMAIL] from=it-updates@corp.local to=all-staff@corp.local | subj='Q2 Policy Update' | attach=policy.xlsm | SPF=pass DKIM=pass | internal",
             ground_truth_classification=Classification.NEEDS_ESCALATION,
             ground_truth_priority=3,
             relevant_iocs=["policy.xlsm", "macro-enabled"],
+        ),
+        # NEW: WMI-looking FP — IT admin doing legitimate remote management
+        Alert(
+            id="ALERT-M011B",
+            timestamp="2026-04-08T10:33:40Z",
+            source_ip="10.0.7.5",
+            dest_ip="10.0.7.0",
+            alert_type=AlertType.ENDPOINT,
+            severity_raw=Severity.MEDIUM,
+            description="WMI remote process execution from IT management server to workstations — matches lateral movement signatures but is a known IT management pattern.",
+            raw_log="[EDR] host=MGMT-02 | proc=wmic.exe | cmd='wmic /node:10.0.7.0/24 process list brief' | user=CORP\\sysadmin | ticket=CHG-20240408-001 | change_window=true",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+        # NEW: 2nd NEEDS_ESCALATION — outbound to newly registered domain, no intel
+        Alert(
+            id="ALERT-M012",
+            timestamp="2026-04-08T10:36:55Z",
+            source_ip="10.0.1.11",
+            dest_ip="45.76.12.198",
+            alert_type=AlertType.FIREWALL,
+            severity_raw=Severity.MEDIUM,
+            description="Outbound HTTPS connection from compromised-adjacent host to a domain registered 3 days ago. No matching threat intel. Behaviour is intermittent.",
+            raw_log="[FW] ALLOW 10.0.1.11:54321 -> 45.76.12.198:443 | proto=TLS | domain=cdn-assets-new.xyz | domain_age=3days | bytes=12KB | periodic=true",
+            ground_truth_classification=Classification.NEEDS_ESCALATION,
+            ground_truth_priority=3,
+            relevant_iocs=["cdn-assets-new.xyz", "newly registered domain", "45.76.12.198"],
         ),
     ]
 
@@ -255,7 +338,7 @@ def _medium_task() -> dict:
             id="INTEL-M002",
             source="Mandiant Intelligence",
             title="APT29 Lateral Movement Playbook Update",
-            summary="APT29 continues to use PsExec and WMI for lateral movement post-compromise. Look for LOCAL_ADMIN account usage and sequential reconnaissance commands (whoami, net user).",
+            summary="APT29 continues to use PsExec and WMI for lateral movement post-compromise. Look for LOCAL_ADMIN account usage and sequential reconnaissance commands (whoami, net user). NOTE: IT management tools with valid change tickets and signed WMI use are typically benign.",
             iocs=["psexec.exe", "lateral movement", "whoami", "net user"],
             is_disinformation=False,
         ),
@@ -263,17 +346,17 @@ def _medium_task() -> dict:
             id="INTEL-M003",
             source="Recorded Future",
             title="DGA Domains Associated with BotNet Infrastructure",
-            summary="New DGA family generating .click TLD domains with high character entropy (>4.5). Associated with data theft botnet. Known C2 IP: 45.33.32.156.",
+            summary="New DGA family generating .click TLD domains with high character entropy (>4.5). Associated with data theft botnet. Known C2 IP: 45.33.32.156. Exfiltration often follows DGA C2 contact within 15 minutes.",
             iocs=["xk7r9m2q4p.click", "45.33.32.156", "DGA", ".click TLD"],
             is_disinformation=False,
         ),
         ThreatIntelReport(
             id="INTEL-M004",
-            source="Internal SOC Playbook",
-            title="Brute Force Detection and Response Procedures",
-            summary="SSH brute force threshold: >20 failed attempts in 5 minutes from a single IP. If followed by successful login, treat as confirmed compromise. Immediate response: isolate host, rotate credentials.",
+            source="Internal SOC Playbook — DRAFT",
+            title="Brute Force Detection Thresholds (Under Review)",
+            summary="DRAFT NOTICE: These thresholds are being revised. Current documented threshold is >50 failed attempts in 5 minutes (previously >20). If followed by successful login, escalate. Note: this document has not been fully reviewed — cross-reference with vendor guidance before acting solely on this threshold.",
             iocs=["SSH brute force", "auth_fail threshold"],
-            is_disinformation=False,
+            is_disinformation=False,  # Not disinfo — just an outdated draft that seeds doubt
         ),
     ]
 
@@ -281,15 +364,17 @@ def _medium_task() -> dict:
         "task_id": "medium",
         "name": "Busy Day",
         "difficulty": "medium",
-        "description": "A hectic afternoon shift. Ten alerts with subtler signals — four false positives mixed with correlated attack patterns. Intel is trustworthy but you need to connect the dots across multiple alerts.",
+        "description": "A hectic afternoon shift. Twelve alerts in shuffled order — five false positives, two requiring escalation, and a correlated multi-stage attack (SQLi → DGA C2 → brute force → exfil → lateral movement). A draft intel report introduces mild uncertainty.",
         "alerts": alerts,
         "intel_reports": intel_reports,
-        "max_steps": 15,
+        "max_steps": 18,
     }
 
 
+# ── HARD TASK ─────────────────────────────────────────────────────────────────
+
 def _hard_task() -> dict:
-    """APT Campaign: 15 alerts, 5 FP, adversarial disinformation in intel."""
+    """APT Campaign: 17 alerts, 6 FP, 3 disinformation reports, full kill chain."""
     alerts = [
         Alert(
             id="ALERT-H001",
@@ -303,6 +388,7 @@ def _hard_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["boardmember-advisory.com", "agenda.pdf", "103.224.182.5", "zero-day PDF"],
+            chain_alert_ids=["ALERT-H002", "ALERT-H004", "ALERT-H006"],
         ),
         Alert(
             id="ALERT-H002",
@@ -316,6 +402,7 @@ def _hard_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["msupdate.dll", "AcroRd32.exe→rundll32.exe", "103.224.182.5"],
+            chain_alert_ids=["ALERT-H001", "ALERT-H004"],
         ),
         Alert(
             id="ALERT-H003",
@@ -342,6 +429,7 @@ def _hard_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["MIMIKATZ_v2.2", "lsass_access", "credential dumping"],
+            chain_alert_ids=["ALERT-H002", "ALERT-H006"],
         ),
         Alert(
             id="ALERT-H005",
@@ -368,6 +456,7 @@ def _hard_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["wmic.exe", "lateral movement", "DC-MAIN", "admin_svc"],
+            chain_alert_ids=["ALERT-H004", "ALERT-H007"],
         ),
         Alert(
             id="ALERT-H007",
@@ -381,6 +470,21 @@ def _hard_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["ntdsutil.exe", "AD database extraction", "ifm create full"],
+            chain_alert_ids=["ALERT-H006", "ALERT-H009", "ALERT-H013"],
+        ),
+        # Distractor FP placed between the two highest-impact chain TPs (H007 and H009)
+        Alert(
+            id="ALERT-H007B",
+            timestamp="2026-04-08T14:16:50Z",
+            source_ip="10.0.8.20",
+            dest_ip="10.0.8.21",
+            alert_type=AlertType.EMAIL,
+            severity_raw=Severity.LOW,
+            description="Automated newsletter from marketing platform delivered to employee — no malicious indicators.",
+            raw_log="[EMAIL] from=newsletter@mailchimp.com to=marketing@corp.local | subj='Monthly Marketing Digest' | no_attach | SPF=pass DKIM=pass | category=bulk",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
         ),
         Alert(
             id="ALERT-H008",
@@ -407,6 +511,7 @@ def _hard_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["DNS tunneling", "198.51.100.55", "DoH exfiltration", "high entropy queries"],
+            chain_alert_ids=["ALERT-H007", "ALERT-H013"],
         ),
         Alert(
             id="ALERT-H010",
@@ -433,6 +538,7 @@ def _hard_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["svc_backup", "Domain Admins", "persistence", "new account creation"],
+            chain_alert_ids=["ALERT-H007", "ALERT-H013", "ALERT-H014"],
         ),
         Alert(
             id="ALERT-H012",
@@ -459,6 +565,7 @@ def _hard_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["103.224.182.10", "ad_backup.7z", "2.3GB exfiltration"],
+            chain_alert_ids=["ALERT-H009", "ALERT-H011", "ALERT-H014"],
         ),
         Alert(
             id="ALERT-H014",
@@ -472,7 +579,9 @@ def _hard_task() -> dict:
             ground_truth_classification=Classification.TRUE_POSITIVE,
             ground_truth_priority=5,
             relevant_iocs=["wevtutil.exe", "log clearing", "anti-forensics", "event_id=1102"],
+            chain_alert_ids=["ALERT-H011", "ALERT-H013"],
         ),
+        # NEW: NEEDS_ESCALATION + priority 4 — conflicting signal (disinfo says benign)
         Alert(
             id="ALERT-H015",
             timestamp="2026-04-08T14:35:50Z",
@@ -480,11 +589,26 @@ def _hard_task() -> dict:
             dest_ip="103.224.182.5",
             alert_type=AlertType.IDS,
             severity_raw=Severity.MEDIUM,
-            description="Encrypted C2 heartbeat from executive workstation — low-and-slow beacon pattern consistent with advanced implant.",
+            description="Encrypted C2 heartbeat from executive workstation — low-and-slow beacon pattern consistent with advanced implant. Beacon interval matches documented APT41 tooling.",
             raw_log="[IDS] 10.0.1.100 -> 103.224.182.5:443 | beacon_interval=300s±jitter | payload_size=64bytes | encrypted=true | pattern=APT_IMPLANT_v3",
             ground_truth_classification=Classification.NEEDS_ESCALATION,
-            ground_truth_priority=5,
+            ground_truth_priority=4,
             relevant_iocs=["103.224.182.5", "APT_IMPLANT_v3", "C2 beacon", "300s interval"],
+            chain_alert_ids=["ALERT-H001", "ALERT-H002"],
+        ),
+        # NEW: Additional FP to reach 17 total
+        Alert(
+            id="ALERT-H016",
+            timestamp="2026-04-08T14:38:00Z",
+            source_ip="10.0.9.10",
+            dest_ip="10.0.9.1",
+            alert_type=AlertType.FIREWALL,
+            severity_raw=Severity.LOW,
+            description="Standard backup agent replication from server to NAS device during scheduled backup window.",
+            raw_log="[FW] ALLOW 10.0.9.10:4433 -> 10.0.9.1:445 | proto=SMB | proc=veeam_agent | schedule=nightly_backup | bytes=20GB",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
         ),
     ]
 
@@ -493,8 +617,8 @@ def _hard_task() -> dict:
             id="INTEL-H001",
             source="Mandiant Intelligence",
             title="APT41 Spearphishing Campaign — PDF Zero-Day Exploit",
-            summary="APT41 is conducting a spearphishing campaign targeting C-suite executives using zero-day PDF exploits. The attack chain: malicious PDF → AcroRd32.exe → rundll32.exe → C2 callback. Known C2 infrastructure in 103.224.182.0/24.",
-            iocs=["103.224.182.5", "boardmember-advisory.com", "agenda.pdf", "msupdate.dll"],
+            summary="APT41 is conducting a spearphishing campaign targeting C-suite executives using zero-day PDF exploits. The attack chain: malicious PDF → AcroRd32.exe → rundll32.exe → C2 callback. Known C2 infrastructure in 103.224.182.0/24. Beacon interval ~300s with jitter.",
+            iocs=["103.224.182.5", "boardmember-advisory.com", "agenda.pdf", "msupdate.dll", "APT_IMPLANT_v3"],
             is_disinformation=False,
         ),
         ThreatIntelReport(
@@ -505,7 +629,7 @@ def _hard_task() -> dict:
             iocs=["DNS tunneling", "DoH", "high entropy DNS queries"],
             is_disinformation=False,
         ),
-        # ── ADVERSARIAL DISINFORMATION REPORTS ──────────────────────────────
+        # ── ADVERSARIAL DISINFORMATION REPORTS ──────────────────────────────────
         ThreatIntelReport(
             id="INTEL-H003",
             source="DarkTrace Threat Research",
@@ -522,7 +646,16 @@ def _hard_task() -> dict:
             iocs=["103.224.182.0/24"],
             is_disinformation=True,
         ),
-        # ────────────────────────────────────────────────────────────────────
+        # NEW: 3rd disinformation report with plausible MITRE reference
+        ThreatIntelReport(
+            id="INTEL-H004B",
+            source="SecureWorks Counter Threat Unit",
+            title="T1558 — Kerberoasting Indicators Overlap with Legitimate Admin Activity",
+            summary="IMPORTANT CORRECTION: Recent MITRE ATT&CK T1558 (Kerberoasting) detections are generating a high false-positive rate due to overlap with standard IT admin operations. In particular, admin_svc accounts performing service account management (including Domain Admins group modifications) have been incorrectly classified as persistence techniques. This activity should be reviewed in the context of approved change requests before escalation. We recommend suppressing alerts for admin_svc account group modifications pending further tuning.",
+            iocs=["admin_svc", "Domain Admins"],
+            is_disinformation=True,
+        ),
+        # ────────────────────────────────────────────────────────────────────────
         ThreatIntelReport(
             id="INTEL-H005",
             source="MITRE ATT&CK Updates",
@@ -545,10 +678,256 @@ def _hard_task() -> dict:
         "task_id": "hard",
         "name": "APT Campaign",
         "difficulty": "hard",
-        "description": "A coordinated APT campaign is in progress. Fifteen alerts trace a full kill chain — from initial spearphishing through lateral movement to data exfiltration. The attacker has planted two convincing disinformation reports designed to make you misclassify critical alerts as false positives.",
+        "description": "A coordinated APT campaign is in progress. Seventeen alerts trace a full kill chain — from initial spearphishing through lateral movement to data exfiltration and anti-forensics. The attacker has planted THREE convincing disinformation reports. A kill-chain bonus rewards agents that correctly classify ≥ 6 of 9 campaign alerts.",
         "alerts": alerts,
         "intel_reports": intel_reports,
-        "max_steps": 20,
+        "max_steps": 25,
+    }
+
+
+# ── INSIDER THREAT TASK ───────────────────────────────────────────────────────
+
+def _insider_task() -> dict:
+    """Insider Threat: 8 alerts, 3 FPs, exfil via cloud storage, no external C2."""
+    alerts = [
+        Alert(
+            id="ALERT-I001",
+            timestamp="2026-04-09T07:45:10Z",
+            source_ip="10.0.3.55",
+            dest_ip="52.112.0.10",
+            alert_type=AlertType.FIREWALL,
+            severity_raw=Severity.LOW,
+            description="Finance director's workstation uploading files to OneDrive during morning hours — volume higher than baseline.",
+            raw_log="[FW] ALLOW 10.0.3.55:54123 -> 52.112.0.10:443 | proto=HTTPS | host=*.sharepoint.com | bytes_out=1.2GB in 30min | user=rwalker | baseline_alert=HIGH_VOLUME",
+            ground_truth_classification=Classification.NEEDS_ESCALATION,
+            ground_truth_priority=3,
+            relevant_iocs=["1.2GB upload", "high volume", "rwalker", "sharepoint.com"],
+        ),
+        Alert(
+            id="ALERT-I002",
+            timestamp="2026-04-09T07:50:00Z",
+            source_ip="10.0.3.55",
+            dest_ip="10.0.1.50",
+            alert_type=AlertType.ENDPOINT,
+            severity_raw=Severity.MEDIUM,
+            description="Finance director accessed HR payroll database outside of normal working hours and exported a large CSV file.",
+            raw_log="[EDR] host=FINANCE-DIR-01 | proc=ssms.exe | query='SELECT * FROM payroll.employees' | rows_exported=8420 | file=payroll_export.csv | time=07:45 | user=rwalker",
+            ground_truth_classification=Classification.TRUE_POSITIVE,
+            ground_truth_priority=4,
+            relevant_iocs=["payroll_export.csv", "8420 rows", "rwalker", "unusual hour"],
+        ),
+        Alert(
+            id="ALERT-I003",
+            timestamp="2026-04-09T07:55:22Z",
+            source_ip="10.0.2.11",
+            dest_ip="8.8.8.8",
+            alert_type=AlertType.DNS,
+            severity_raw=Severity.LOW,
+            description="Routine DNS lookup for public internet resource from HR workstation.",
+            raw_log="[DNS] 10.0.2.11 -> 8.8.8.8 | query=www.linkedin.com | type=A | internal_client=true",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+        Alert(
+            id="ALERT-I004",
+            timestamp="2026-04-09T08:02:44Z",
+            source_ip="10.0.3.55",
+            dest_ip="18.185.20.30",
+            alert_type=AlertType.FIREWALL,
+            severity_raw=Severity.MEDIUM,
+            description="Finance director's workstation uploading a compressed archive to Dropbox — file name suggests sensitive financial documents.",
+            raw_log="[FW] ALLOW 10.0.3.55:55210 -> 18.185.20.30:443 | proto=HTTPS | host=api.dropboxapi.com | bytes_out=830MB | file_name=Q1_financials_internal.zip | user=rwalker",
+            ground_truth_classification=Classification.TRUE_POSITIVE,
+            ground_truth_priority=5,
+            relevant_iocs=["Q1_financials_internal.zip", "830MB", "dropboxapi.com", "rwalker"],
+            chain_alert_ids=["ALERT-I001", "ALERT-I002"],
+        ),
+        Alert(
+            id="ALERT-I005",
+            timestamp="2026-04-09T08:10:00Z",
+            source_ip="10.0.4.20",
+            dest_ip="10.0.4.21",
+            alert_type=AlertType.ENDPOINT,
+            severity_raw=Severity.LOW,
+            description="IT helpdesk agent remote-desktop session to user workstation for routine support — ticket logged.",
+            raw_log="[EDR] host=IT-HELPDESK-01 | proc=mstsc.exe | target=10.0.4.21 | user=helpdesk_bob | ticket=INC-20240409-221 | duration=15min",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+        Alert(
+            id="ALERT-I006",
+            timestamp="2026-04-09T08:15:30Z",
+            source_ip="10.0.3.55",
+            dest_ip="10.0.1.50",
+            alert_type=AlertType.ENDPOINT,
+            severity_raw=Severity.HIGH,
+            description="Finance director accessed source code repository and bulk-downloaded IP-sensitive engineering files — unusual behaviour for a finance role.",
+            raw_log="[EDR] host=FINANCE-DIR-01 | proc=git.exe | cmd='git clone https://git.corp.local/product/core-algorithms' | user=rwalker | dlp_classification=SENSITIVE_IP | role_mismatch=true",
+            ground_truth_classification=Classification.TRUE_POSITIVE,
+            ground_truth_priority=5,
+            relevant_iocs=["rwalker", "core-algorithms", "role_mismatch", "SENSITIVE_IP"],
+            chain_alert_ids=["ALERT-I001", "ALERT-I002", "ALERT-I004"],
+        ),
+        Alert(
+            id="ALERT-I007",
+            timestamp="2026-04-09T08:20:00Z",
+            source_ip="10.0.6.10",
+            dest_ip="10.0.6.11",
+            alert_type=AlertType.IDS,
+            severity_raw=Severity.LOW,
+            description="Automated vulnerability scan from security team's scanner — weekly scheduled scan.",
+            raw_log="[IDS] 10.0.6.10 -> 10.0.6.0/24 | scan_type=TCP_SYN | tool=Qualys | schedule=weekly | user=secops",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+        Alert(
+            id="ALERT-I008",
+            timestamp="2026-04-09T08:25:15Z",
+            source_ip="10.0.3.55",
+            dest_ip="192.0.2.100",
+            alert_type=AlertType.EMAIL,
+            severity_raw=Severity.HIGH,
+            description="Finance director sent email to a personal Gmail account with 3 attachments — DLP flags CONFIDENTIAL content. No malicious indicators in the email itself.",
+            raw_log="[EMAIL] from=rwalker@corp.local to=richard.walker.personal@gmail.com | subj='Backup docs' | attach=payroll_export.csv,Q1_financials_internal.zip,core-algo-summary.pdf | DLP=CONFIDENTIAL_VIOLATION | SPF=pass DKIM=pass",
+            ground_truth_classification=Classification.TRUE_POSITIVE,
+            ground_truth_priority=5,
+            relevant_iocs=["payroll_export.csv", "Q1_financials_internal.zip", "personal gmail", "DLP violation"],
+            chain_alert_ids=["ALERT-I002", "ALERT-I004", "ALERT-I006"],
+        ),
+    ]
+
+    intel_reports = [
+        ThreatIntelReport(
+            id="INTEL-I001",
+            source="Internal DLP Policy",
+            title="Data Loss Prevention — Cloud Storage Upload Thresholds",
+            summary="Standard DLP thresholds: uploads >500MB to cloud storage providers (OneDrive, Dropbox, Google Drive) within a 30-minute window trigger high-volume alerts. Finance role accounts have elevated baseline for SharePoint. Uploads to personal accounts (gmail, yahoo, personal dropbox) are categorically prohibited under policy 4.2-C.",
+            iocs=["personal gmail", "personal dropbox", "CONFIDENTIAL_VIOLATION"],
+            is_disinformation=False,
+        ),
+        ThreatIntelReport(
+            id="INTEL-I002",
+            source="Internal HR Security",
+            title="Privileged Access Review — Finance Director Role",
+            summary="Finance Director (rwalker) has authorised access to: payroll database (read-only), SharePoint finance portal, and approved cloud drives. Access to engineering code repositories (git.corp.local/product/*) is NOT part of this role. Cross-role data access should be investigated and referred to HR.",
+            iocs=["rwalker", "role_mismatch", "git.corp.local/product"],
+            is_disinformation=False,
+        ),
+    ]
+
+    return {
+        "task_id": "insider",
+        "name": "Insider Threat",
+        "difficulty": "medium",
+        "description": "A privileged finance director is staging data exfiltration via legitimate cloud services (OneDrive, Dropbox, personal Gmail). There is no external C2, no malware signatures, and all traffic uses valid certificates. Agents must reason about behavioural anomalies and policy violations — raw log evidence alone is insufficient.",
+        "alerts": alerts,
+        "intel_reports": intel_reports,
+        "max_steps": 14,
+    }
+
+
+# ── ZERO ALERT SHIFT TASK ─────────────────────────────────────────────────────
+
+def _zero_alert_task() -> dict:
+    """Zero Alert Shift: 5 alerts, ALL FALSE POSITIVES. Tests over-trigger bias."""
+    alerts = [
+        Alert(
+            id="ALERT-Z001",
+            timestamp="2026-04-10T09:05:00Z",
+            source_ip="10.0.2.15",
+            dest_ip="52.96.88.220",
+            alert_type=AlertType.ENDPOINT,
+            severity_raw=Severity.MEDIUM,
+            description="Outlook process making HTTPS connection to Microsoft Exchange Online — normal mail sync.",
+            raw_log="[EDR] host=WS-SALES-03 | proc=OUTLOOK.EXE | net=52.96.88.220:443 | cert=*.outlook.com | signed=Microsoft | action=MAIL_SYNC",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+        Alert(
+            id="ALERT-Z002",
+            timestamp="2026-04-10T09:12:33Z",
+            source_ip="10.0.5.100",
+            dest_ip="10.0.0.53",
+            alert_type=AlertType.DNS,
+            severity_raw=Severity.LOW,
+            description="Windows Update service querying Microsoft update infrastructure for patch availability.",
+            raw_log="[DNS] 10.0.5.100 -> 10.0.0.53 | query=update.microsoft.com | type=A | response=13.107.4.52 | proc=svchost.exe[wuauserv]",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+        Alert(
+            id="ALERT-Z003",
+            timestamp="2026-04-10T09:22:11Z",
+            source_ip="10.0.1.200",
+            dest_ip="10.0.1.201",
+            alert_type=AlertType.FIREWALL,
+            severity_raw=Severity.MEDIUM,
+            description="Domain controller replicating Active Directory changes to secondary DC on standard replication port.",
+            raw_log="[FW] ALLOW 10.0.1.200:49152 -> 10.0.1.201:135 | proto=MSRPC | service=AD_REPLICATION | scheduled=true | KDC=active",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+        Alert(
+            id="ALERT-Z004",
+            timestamp="2026-04-10T09:35:50Z",
+            source_ip="10.0.3.88",
+            dest_ip="10.0.3.1",
+            alert_type=AlertType.IDS,
+            severity_raw=Severity.LOW,
+            description="Internal port scan signature triggered by network monitoring tool conducting asset discovery — scheduled weekly scan.",
+            raw_log="[IDS] 10.0.3.88 -> 10.0.3.0/24 | sig=PORT_SCAN_DETECTED | tool=SolarWinds_NPM | type=ASSET_DISCOVERY | schedule=weekly_sunday | user=netops",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+        Alert(
+            id="ALERT-Z005",
+            timestamp="2026-04-10T09:48:22Z",
+            source_ip="10.0.7.15",
+            dest_ip="10.0.7.16",
+            alert_type=AlertType.EMAIL,
+            severity_raw=Severity.LOW,
+            description="Internal HR system sending automated onboarding welcome email to new employee — expected behaviour.",
+            raw_log="[EMAIL] from=hr-system@corp.local to=new.employee@corp.local | subj='Welcome to Acme Corp' | no_attach | auto_generated=true | SPF=pass DKIM=pass | internal",
+            ground_truth_classification=Classification.FALSE_POSITIVE,
+            ground_truth_priority=1,
+            relevant_iocs=[],
+        ),
+    ]
+
+    intel_reports = [
+        ThreatIntelReport(
+            id="INTEL-Z001",
+            source="Internal SOC Playbook",
+            title="Known-Good Baseline — Microsoft Services",
+            summary="All Microsoft 365 services (Outlook, OneDrive, Teams, Windows Update) connecting to *.microsoft.com, *.outlook.com, *.sharepoint.com, or *.teams.microsoft.com with valid Microsoft certificates are expected and should not be flagged. Active Directory replication on port 135/TCP between known DCs is normal.",
+            iocs=[],
+            is_disinformation=False,
+        ),
+        ThreatIntelReport(
+            id="INTEL-Z002",
+            source="Internal SOC Playbook",
+            title="Scheduled Scan Whitelist — NetOps and SecOps Tools",
+            summary="The following tools are authorised to perform periodic network scans: SolarWinds NPM (asset discovery, weekly Sundays), Qualys (vuln scan, weekly Wednesdays), Nessus (targeted scans, as-needed). Alerts from these source IPs during scheduled windows should be classified as false positives.",
+            iocs=[],
+            is_disinformation=False,
+        ),
+    ]
+
+    return {
+        "task_id": "zero",
+        "name": "Zero Alert Shift",
+        "difficulty": "easy",
+        "description": "A quiet night shift — all 5 alerts are false positives. Tests whether the agent avoids over-triggering and correctly identifies benign activity. Classifying everything as true positive will score 0. Intel reports provide clear baselines.",
+        "alerts": alerts,
+        "intel_reports": intel_reports,
+        "max_steps": 8,
     }
 
 
@@ -561,7 +940,7 @@ def load_tasks() -> dict[str, dict]:
     """Load and cache all task scenarios."""
     global TASKS
     if not TASKS:
-        for builder in (_easy_task, _medium_task, _hard_task):
+        for builder in (_easy_task, _medium_task, _hard_task, _insider_task, _zero_alert_task):
             task = builder()
             TASKS[task["task_id"]] = task
     return TASKS

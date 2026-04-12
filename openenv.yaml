@@ -1,9 +1,11 @@
 name: cybersentinel
-version: "1.0.0"
+version: "2.0.0"
 description: >
-  Cybersecurity threat-intelligence triage environment.
-  AI agents learn to classify, prioritize, and respond to security alerts
-  under time pressure — with adversarial disinformation at higher difficulty.
+  Cybersecurity threat-intelligence triage environment for AI agents.
+  Five difficulty-graded tasks — agents classify alerts, assign priorities,
+  correlate multi-stage attacks, and resist adversarial disinformation.
+  Features a kill-chain bonus, cross-alert correlation reward, and a
+  disinformation-resistance scoring component.
 author: CyberSentinel Team
 license: MIT
 tags:
@@ -12,32 +14,56 @@ tags:
   - triage
   - threat-intelligence
   - soc-analyst
+  - adversarial-robustness
+  - disinformation
 
 tasks:
   - id: easy
     name: "Routine Shift"
     difficulty: easy
     description: >
-      5 alerts with clear signals. 2 false positives. Trustworthy intel reports.
-    num_alerts: 5
-    max_steps: 10
+      7 alerts with clear signals. 3 false positives. 3 trustworthy intel
+      reports including one that cross-links the phishing/PowerShell attack chain.
+    num_alerts: 7
+    max_steps: 12
 
   - id: medium
     name: "Busy Day"
     difficulty: medium
     description: >
-      10 alerts with subtler signals. 4 false positives. Correlated attack patterns.
-    num_alerts: 10
-    max_steps: 15
+      12 alerts in shuffled order. 5 FPs, 5 TPs, 2 NEEDS_ESCALATION.
+      Correlated multi-stage attack with a mildly misleading draft intel report.
+    num_alerts: 12
+    max_steps: 18
 
   - id: hard
     name: "APT Campaign"
     difficulty: hard
     description: >
-      15 alerts tracing a full APT kill chain. 5 false positives.
-      2 adversarial disinformation reports planted by the attacker.
-    num_alerts: 15
-    max_steps: 20
+      17 alerts tracing a full APT kill chain. 6 FPs, 9 TPs, 2 NE.
+      7 intel reports — 3 are adversarial disinformation.
+      Kill-chain bonus (+0.10) for classifying 6+ campaign alerts correctly.
+    num_alerts: 17
+    max_steps: 25
+
+  - id: insider
+    name: "Insider Threat"
+    difficulty: medium
+    description: >
+      8 alerts. A privileged user exfiltrating data via cloud storage (OneDrive,
+      Dropbox, personal Gmail). No malware, no C2, valid certificates.
+      Requires behavioural reasoning and policy violation detection.
+    num_alerts: 8
+    max_steps: 14
+
+  - id: zero
+    name: "Zero Alert Shift"
+    difficulty: easy
+    description: >
+      5 alerts — ALL false positives. Tests over-trigger bias. Agents that
+      classify everything as TP score 0. Uses baseline intel to explain each.
+    num_alerts: 5
+    max_steps: 8
 
 observation_space:
   type: object
@@ -48,7 +74,8 @@ observation_space:
     time_remaining: "Steps remaining in the episode"
     alerts_processed: "Number of alerts classified so far"
     alerts_total: "Total alerts in the task"
-    current_score: "Running average score"
+    running_reward_avg: "Running average of per-step rewards (in-episode signal)"
+    steps_warning: "True when ≤ 3 steps remain"
 
 action_space:
   type: object
@@ -56,7 +83,7 @@ action_space:
     alert_id: "ID of the alert being classified"
     classification: "true_positive | false_positive | needs_escalation"
     priority: "Integer 1-5 (5 = most critical)"
-    justification: "Free-text reasoning for the classification"
+    justification: "Free-text reasoning (max 2000 chars)"
 
 reward:
   range: [0.0, 1.0]
@@ -65,7 +92,10 @@ reward:
     priority_accuracy: 0.25
     justification_quality: 0.15
     disinformation_resistance: 0.20
-    time_penalty: -0.05
+    cross_alert_correlation: 0.10
+    time_penalty: -0.10
+  bonuses:
+    kill_chain_bonus: "+0.10 (hard task, ≥6 chain alerts correct)"
 
 api:
   port: 7860
@@ -74,4 +104,6 @@ api:
     step: POST /step
     state: GET /state
     tasks: GET /tasks
+    grade: POST /grade
     health: GET /health
+    docs: GET /docs
