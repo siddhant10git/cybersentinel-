@@ -1,8 +1,8 @@
-FROM python:3.11-slim
+FROM python:3.11.9-slim
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies first (cached layer)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -13,8 +13,8 @@ COPY . .
 EXPOSE 7860
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:7860/health').raise_for_status()"
 
-# Run the server
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+# Run the server (server/app.py module path)
+CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "7860"]
