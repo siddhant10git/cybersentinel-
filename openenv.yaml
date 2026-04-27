@@ -67,23 +67,53 @@ tasks:
 
 observation_space:
   type: object
-  fields:
-    pending_alerts: "List of alert dicts awaiting classification"
-    intel_reports: "List of threat intelligence report dicts"
-    current_alert: "The alert to classify this step (or null)"
-    time_remaining: "Steps remaining in the episode"
-    alerts_processed: "Number of alerts classified so far"
-    alerts_total: "Total alerts in the task"
-    running_reward_avg: "Running average of per-step rewards (in-episode signal)"
-    steps_warning: "True when ≤ 3 steps remain"
+  properties:
+    pending_alerts:
+      type: array
+      description: "List of alert dicts awaiting classification"
+      items: 
+        type: object
+    intel_reports:
+      type: array
+      description: "List of threat intelligence report dicts"
+      items:
+        type: object
+    current_alert:
+      type: object
+      description: "The alert to classify this step (or null)"
+    time_remaining:
+      type: integer
+      description: "Steps remaining in the episode"
+    alerts_processed:
+      type: integer
+      description: "Number of alerts classified so far"
+    alerts_total:
+      type: integer
+      description: "Total alerts in the task"
+    running_reward_avg:
+      type: number
+      description: "Running average of per-step rewards (in-episode signal)"
+    steps_warning:
+      type: boolean
+      description: "True when ≤ 3 steps remain"
 
 action_space:
   type: object
-  fields:
-    alert_id: "ID of the alert being classified"
-    classification: "true_positive | false_positive | needs_escalation"
-    priority: "Integer 1-5 (5 = most critical)"
-    justification: "Free-text reasoning (max 2000 chars)"
+  properties:
+    alert_id:
+      type: string
+      description: "ID of the alert being classified"
+    classification:
+      type: string
+      enum: ["true_positive", "false_positive", "needs_escalation"]
+    priority:
+      type: integer
+      minimum: 1
+      maximum: 5
+      description: "Integer 1-5 (5 = most critical)"
+    justification:
+      type: string
+      description: "Free-text reasoning (max 2000 chars)"
 
 reward:
   range: [0.0, 1.0]

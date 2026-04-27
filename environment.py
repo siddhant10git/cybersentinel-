@@ -246,6 +246,25 @@ class CyberSentinelEnv:
         }
         if self._done:
             final_score = sum(self._scores.values()) / max(len(self._alerts), 1)
+            
+            # Kill-chain bonus for hard task
+            if self._task_id == "hard":
+                hard_chain_ids = {
+                    "ALERT-H001", "ALERT-H002", "ALERT-H004", "ALERT-H006",
+                    "ALERT-H007", "ALERT-H009", "ALERT-H011", "ALERT-H013", "ALERT-H014"
+                }
+                chain_correct = 0
+                for aid, details in self._reward_details.items():
+                    if aid in hard_chain_ids and details.get("classification", 0) >= self._config.classification_weight * 0.99:
+                        chain_correct += 1
+                
+                if chain_correct >= self._config.chain_bonus_threshold:
+                    bonus = self._config.chain_bonus
+                    final_score = min(1.0, final_score + bonus)
+                    # Add total bonus mass so step sum is consistent
+                    reward.total += bonus * len(self._alerts)
+                    info["kill_chain_bonus_awarded"] = True
+
             info["final_score"] = round(final_score, 4)
             info["alerts_graded"] = len(self._scores)
             info["alerts_missed"] = len(self._pending_ids)

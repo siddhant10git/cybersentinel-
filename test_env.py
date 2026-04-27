@@ -356,6 +356,9 @@ def test_cross_alert_correlation():
 # ── Runner ───────────────────────────────────────────────────────────────────
 
 def main():
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding='utf-8')
     tests = [
         test_easy_task_full_run,
         test_medium_task_loads,
